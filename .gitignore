@@ -1,0 +1,35 @@
+.env
+
+# build outputs
+/bin/
+/dist/
+/build/
+/out/
+
+# IDE/editor
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Go
+go.work
+go.work.sum
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Node
+node_modules/
+
+# Coverage
+coverage/
