@@ -26,6 +26,13 @@ base := queue.NewConfig(
 )
 ```
 
+### 2.1 内置 Codec
+
+`components/queue` 内置以下编码器：
+- `JSONCodec[T]`
+- `BytesCodec`（`[]byte`）
+- `StringCodec`（`string`）
+
 ## 3. Kafka 使用
 
 ### 3.1 创建 Provider
@@ -38,6 +45,20 @@ kafka.WithGroupID("demo-group"),
 kafka.WithConsumePartition(0),
 kafka.WithHashBalancer(),
 kafka.WithCodec[Payload](queue.JSONCodec[Payload]{}),
+)
+```
+
+### 3.8 Protobuf Codec
+
+```go
+import "github.com/alonexy/complug/contrib/queue/protobuf"
+
+type MyMessage = pb.MyMessage
+
+provider, _ := kafka.NewKafkaProvider[*MyMessage](
+    kafka.WithBrokers("localhost:9092"),
+    kafka.WithTopic("demo-topic"),
+    kafka.WithCodec[*MyMessage](protobuf.Codec[*MyMessage]{}),
 )
 ```
 

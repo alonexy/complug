@@ -105,3 +105,25 @@ func (JSONCodec[T]) Decode(_ context.Context, data []byte) (T, error) {
 	var v T
 	return v, json.Unmarshal(data, &v)
 }
+
+// BytesCodec passes raw bytes through unchanged.
+type BytesCodec struct{}
+
+func (BytesCodec) Encode(_ context.Context, value []byte) ([]byte, error) {
+	return value, nil
+}
+
+func (BytesCodec) Decode(_ context.Context, data []byte) ([]byte, error) {
+	return data, nil
+}
+
+// StringCodec encodes/decodes UTF-8 strings.
+type StringCodec struct{}
+
+func (StringCodec) Encode(_ context.Context, value string) ([]byte, error) {
+	return []byte(value), nil
+}
+
+func (StringCodec) Decode(_ context.Context, data []byte) (string, error) {
+	return string(data), nil
+}

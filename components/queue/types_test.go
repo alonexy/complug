@@ -50,3 +50,33 @@ func TestJSONCodecRoundtrip(t *testing.T) {
 		t.Fatalf("unexpected decode result: %#v", got)
 	}
 }
+
+func TestBytesCodecRoundtrip(t *testing.T) {
+	codec := BytesCodec{}
+	data, err := codec.Encode(context.Background(), []byte("hello"))
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	got, err := codec.Decode(context.Background(), data)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if string(got) != "hello" {
+		t.Fatalf("unexpected decode result: %s", string(got))
+	}
+}
+
+func TestStringCodecRoundtrip(t *testing.T) {
+	codec := StringCodec{}
+	data, err := codec.Encode(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	got, err := codec.Decode(context.Background(), data)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if got != "hello" {
+		t.Fatalf("unexpected decode result: %s", got)
+	}
+}
