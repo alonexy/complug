@@ -54,6 +54,16 @@ Complug 采用 **Monorepo (单仓多模块)** 架构，核心目标是实现极�
     * 核心层：`github.com/{org}/complug/components/{domain}`
     * 实现层：`github.com/{org}/complug/contrib/{domain}/{driver}`
 
+### 4.1 版本依赖示例
+
+```bash
+# Kafka 适配
+go get github.com/alonexy/complug/contrib/queue/kafka@v1.0.1
+
+# RabbitMQ 适配
+go get github.com/alonexy/complug/contrib/queue/rabbitmq@v1.0.1
+```
+
 ---
 
 ## 5. AI 协作指令 (AI Prompt Guardrails)

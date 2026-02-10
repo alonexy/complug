@@ -77,7 +77,13 @@ func main() {
 		log.Printf("seed wait error: %v", err)
 		return
 	}
-	if err := bridge.Run(ctx, kProvider.Consumer(), rProvider.Producer(), bridge.WithRetryBackoff(2*time.Second)); err != nil {
+	if err := bridge.Run(
+		ctx,
+		kProvider.Consumer(),
+		rProvider.Producer(),
+		bridge.WithRetryBackoff(2*time.Second),
+		bridge.WithLogLevel(bridge.LogDebug),
+	); err != nil {
 		log.Printf("bridge exit: %v", err)
 	}
 }

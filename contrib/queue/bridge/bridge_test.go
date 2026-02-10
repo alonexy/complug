@@ -71,7 +71,7 @@ func TestRunHappyPath(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- Run[string](ctx, cons, prod, WithRetryBackoff(5*time.Millisecond))
+		done <- Run[string](ctx, cons, prod, WithRetryBackoff(5*time.Millisecond), WithCommitStrategy(CommitOnSuccess))
 	}()
 
 	// Wait for commit to happen.
@@ -96,7 +96,7 @@ func TestRunRetriesOnReceiveError(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- Run[string](ctx, cons, prod, WithRetryBackoff(5*time.Millisecond))
+		done <- Run[string](ctx, cons, prod, WithRetryBackoff(5*time.Millisecond), WithCommitStrategy(CommitOnSuccess))
 	}()
 
 	time.Sleep(15 * time.Millisecond)
@@ -113,7 +113,7 @@ func TestRunRetriesOnSendError(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- Run[string](ctx, cons, prod, WithRetryBackoff(5*time.Millisecond))
+		done <- Run[string](ctx, cons, prod, WithRetryBackoff(5*time.Millisecond), WithCommitStrategy(CommitOnSuccess))
 	}()
 
 	time.Sleep(15 * time.Millisecond)

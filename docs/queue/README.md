@@ -157,7 +157,21 @@ rabbitmq.WithRetryClassifier(func(err error) bool {
 }),
 ```
 
-## 4. Demo
+## 5. Bridge 使用
+
+```go
+bridge.Run(ctx, source, dest,
+    bridge.WithRetryBackoff(1*time.Second),
+    bridge.WithCommitStrategy(bridge.CommitOnSuccess),
+    bridge.WithLogLevel(bridge.LogInfo),
+)
+```
+
+提交策略：
+- `CommitAlways`：无论发送成功与否都提交（可能丢消息）
+- `CommitOnSuccess`：发送成功后提交（至少一次语义）
+
+## 6. Demo
 
 运行 `examples/queue-bridge` 可看到 Kafka -> RabbitMQ 桥接与定时生产示例：
 ```bash
