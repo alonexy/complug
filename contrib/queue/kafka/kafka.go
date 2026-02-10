@@ -28,6 +28,8 @@ type Config struct {
 	GroupBalancers           []kafka.GroupBalancer
 	StartOffset              int64
 	IsolationLevel           kafka.IsolationLevel
+	EnableAutoCommit         bool
+	AutoCommitInterval       time.Duration
 	ReadTimeout              time.Duration
 	WriteTimeout             time.Duration
 	BatchSize                int
@@ -218,6 +220,22 @@ func WithStartOffset(offset int64) Option {
 func WithIsolationLevel(level kafka.IsolationLevel) Option {
 	return func(cfg *runtimeConfig) {
 		cfg.IsolationLevel = level
+	}
+}
+
+// WithEnableAutoCommit 设置是否启用自动提交（仅对消费组生效）。
+func WithEnableAutoCommit(enabled bool) Option {
+	return func(cfg *runtimeConfig) {
+		cfg.EnableAutoCommit = enabled
+	}
+}
+
+// WithAutoCommitInterval 设置自动提交间隔（EnableAutoCommit=true 时生效）。
+func WithAutoCommitInterval(interval time.Duration) Option {
+	return func(cfg *runtimeConfig) {
+		if interval > 0 {
+			cfg.AutoCommitInterval = interval
+		}
 	}
 }
 
@@ -490,6 +508,8 @@ func defaultConfig[T any]() runtimeConfig {
 			ReadBatchTimeout:         0,
 			StartOffset:              0,
 			IsolationLevel:           0,
+			EnableAutoCommit:         false,
+			AutoCommitInterval:       0,
 			ReadTimeout:              10 * time.Second,
 			WriteTimeout:             10 * time.Second,
 			BatchSize:                0,
@@ -749,6 +769,9 @@ func (c *consumer[T]) Commit(ctx context.Context, msg queue.Message[T]) error {
 	if c.cfg.GroupID == "" {
 		return nil
 	}
+	if c.cfg.EnableAutoCommit {
+		return nil
+	}
 	kmsg, ok := msg.Raw.(kafka.Message)
 	if !ok {
 		return queue.ErrInvalidMessage
@@ -806,6 +829,13 @@ func (c *consumer[T]) ensureReader() *kafka.Reader {
 			Dialer:         dialerFromTransport(c.cfg.Transport, c.cfg.ClientID),
 			MaxWait:        c.cfg.ReadTimeout,
 			CommitInterval: 0,
+		}
+		if c.cfg.EnableAutoCommit {
+			if c.cfg.AutoCommitInterval > 0 {
+				config.CommitInterval = c.cfg.AutoCommitInterval
+			} else {
+				config.CommitInterval = time.Second
+			}
 		}
 		if c.cfg.GroupID != "" {
 			config.GroupID = c.cfg.GroupID

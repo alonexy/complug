@@ -38,6 +38,7 @@ func TestWithOptionsApplies(t *testing.T) {
 		WithRoutingKey("rk"),
 		WithQueueName("q"),
 		WithConsumerTag("tag"),
+		WithAutoAck(true),
 		WithDurable(false),
 		WithAutoDelete(true),
 		WithExclusive(true),
@@ -58,6 +59,9 @@ func TestWithOptionsApplies(t *testing.T) {
 	}
 	if cfg.RoutingKey != "rk" || cfg.QueueName != "q" || cfg.ConsumerTag != "tag" {
 		t.Fatalf("unexpected routing/queue/tag: %s/%s/%s", cfg.RoutingKey, cfg.QueueName, cfg.ConsumerTag)
+	}
+	if !cfg.AutoAck {
+		t.Fatalf("expected AutoAck=true")
 	}
 	if cfg.Durable || !cfg.AutoDelete || !cfg.Exclusive || !cfg.NoWait {
 		t.Fatalf("unexpected durable/autoDelete/exclusive/noWait: %v/%v/%v/%v", cfg.Durable, cfg.AutoDelete, cfg.Exclusive, cfg.NoWait)

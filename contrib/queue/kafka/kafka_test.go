@@ -48,6 +48,8 @@ func TestWithOptionsApplies(t *testing.T) {
 		WithGroupBalancers(&kafkago.RangeGroupBalancer{}),
 		WithStartOffset(5),
 		WithIsolationLevel(kafkago.ReadCommitted),
+		WithEnableAutoCommit(true),
+		WithAutoCommitInterval(2*time.Second),
 		WithReadTimeout(6*time.Second),
 		WithWriteTimeout(7*time.Second),
 		WithBatchSize(8),
@@ -90,6 +92,9 @@ func TestWithOptionsApplies(t *testing.T) {
 	}
 	if cfg.StartOffset != 5 || cfg.IsolationLevel != kafkago.ReadCommitted {
 		t.Fatalf("unexpected start/isolation: %d/%v", cfg.StartOffset, cfg.IsolationLevel)
+	}
+	if !cfg.EnableAutoCommit || cfg.AutoCommitInterval != 2*time.Second {
+		t.Fatalf("unexpected auto commit config: %v/%s", cfg.EnableAutoCommit, cfg.AutoCommitInterval)
 	}
 	if cfg.ReadTimeout != 6*time.Second || cfg.WriteTimeout != 7*time.Second {
 		t.Fatalf("unexpected read/write timeout: %s/%s", cfg.ReadTimeout, cfg.WriteTimeout)

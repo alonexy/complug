@@ -20,6 +20,7 @@ type Config struct {
 	RoutingKey          string
 	QueueName           string
 	ConsumerTag         string
+	AutoAck             bool
 	Durable             bool
 	AutoDelete          bool
 	Exclusive           bool
@@ -111,6 +112,13 @@ func WithQueueName(name string) Option {
 func WithConsumerTag(tag string) Option {
 	return func(cfg *runtimeConfig) {
 		cfg.ConsumerTag = tag
+	}
+}
+
+// WithAutoAck 设置是否自动确认消息。
+func WithAutoAck(autoAck bool) Option {
+	return func(cfg *runtimeConfig) {
+		cfg.AutoAck = autoAck
 	}
 }
 
@@ -585,6 +593,9 @@ func (c *consumer[T]) Commit(ctx context.Context, msg queue.Message[T]) error {
 	if c.closed.Load() {
 		return queue.ErrClosed
 	}
+	if c.cfg.AutoAck {
+		return nil
+	}
 	delivery, ok := msg.Raw.(amqp.Delivery)
 	if !ok {
 		return queue.ErrInvalidMessage
@@ -641,7 +652,7 @@ func (c *consumer[T]) ensureDeliveries() (<-chan amqp.Delivery, error) {
 	deliveries, err := ch.Consume(
 		c.cfg.QueueName,
 		c.cfg.ConsumerTag,
-		false,
+		c.cfg.AutoAck,
 		c.cfg.Exclusive,
 		false,
 		c.cfg.NoWait,
@@ -661,6 +672,10 @@ func (c *consumer[T]) resetDeliveries() {
 }
 
 func (c *consumer[T]) handleDecodeError(delivery amqp.Delivery, err error) bool {
+	if c.cfg.AutoAck {
+		c.cfg.Logger("rabbitmq decode error with autoAck: %v", err)
+		return true
+	}
 	switch c.cfg.DecodeErrorStrategy {
 	case DecodeErrorAck:
 		if ackErr := delivery.Ack(false); ackErr != nil {

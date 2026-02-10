@@ -73,6 +73,8 @@ kafka.WithReadBatchTimeout(5*time.Second),
 kafka.WithGroupBalancers(kafka.RangeGroupBalancer, kafka.RoundRobinGroupBalancer),
 kafka.WithStartOffset(kafka.FirstOffset),
 kafka.WithIsolationLevel(kafka.ReadCommitted),
+kafka.WithEnableAutoCommit(true),
+kafka.WithAutoCommitInterval(2*time.Second),
 ```
 
 ### 3.6 Writer 调优
@@ -108,9 +110,10 @@ rProvider, err := rabbitmq.NewRabbitProvider[Payload](
     rabbitmq.WithQueueConfig(base),
     rabbitmq.WithURL("amqp://guest:guest@localhost:5672/"),
     rabbitmq.WithExchange("events-ex", "topic"),
-    rabbitmq.WithQueueName("events-queue"),
-    rabbitmq.WithRoutingKey("events.*"),
-    rabbitmq.WithCodec[Payload](queue.JSONCodec[Payload]{}),
+rabbitmq.WithQueueName("events-queue"),
+rabbitmq.WithAutoAck(false),
+rabbitmq.WithRoutingKey("events.*"),
+rabbitmq.WithCodec[Payload](queue.JSONCodec[Payload]{}),
 )
 ```
 

@@ -46,9 +46,21 @@ func Run[T any](ctx context.Context, source queue.Consumer[T], dest queue.Produc
 			continue
 		}
 		if err := dest.Send(ctx, msg); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			time.Sleep(cfg.RetryBackoff)
 			continue
 		}
-		_ = source.Commit(ctx, msg)
+		for {
+			if err := source.Commit(ctx, msg); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				time.Sleep(cfg.RetryBackoff)
+				continue
+			}
+			break
+		}
 	}
 }
