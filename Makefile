@@ -2,6 +2,7 @@ MODULES := \
 	components/queue \
 	contrib/queue/bridge \
 	contrib/queue/kafka \
+	contrib/queue/protobuf \
 	contrib/queue/rabbitmq \
 	examples/queue-bridge
 

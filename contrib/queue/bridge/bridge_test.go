@@ -120,3 +120,24 @@ func TestRunRetriesOnSendError(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestRunCommitAlwaysCommitsWhenSendFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cons := &fakeConsumer[string]{messages: []queue.Message[string]{{Value: "a"}}}
+	prod := &fakeProducer[string]{sendErr: errors.New("send failed")}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Run[string](ctx, cons, prod, WithRetryBackoff(5*time.Millisecond), WithCommitStrategy(CommitAlways))
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+
+	if cons.commits == 0 {
+		t.Fatalf("expected commit on send failure when using CommitAlways")
+	}
+}

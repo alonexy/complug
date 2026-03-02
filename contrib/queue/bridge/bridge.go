@@ -81,6 +81,21 @@ func levelString(level LogLevel) string {
 	}
 }
 
+func commitWithRetry[T any](ctx context.Context, cfg Config, source queue.Consumer[T], msg queue.Message[T]) error {
+	for {
+		if err := source.Commit(ctx, msg); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			cfg.log(LogError, "bridge commit error: %v", err)
+			time.Sleep(cfg.RetryBackoff)
+			continue
+		}
+		cfg.log(LogDebug, "bridge committed message key=%s", msg.Key)
+		return nil
+	}
+}
+
 // Run consumes messages from the source and publishes them to the destination.
 func Run[T any](ctx context.Context, source queue.Consumer[T], dest queue.Producer[T], opts ...Option) error {
 	cfg := defaultConfig()
@@ -105,22 +120,18 @@ func Run[T any](ctx context.Context, source queue.Consumer[T], dest queue.Produc
 				return ctx.Err()
 			}
 			cfg.log(LogError, "bridge send error: %v", err)
+			if cfg.CommitStrategy == CommitAlways {
+				if err := commitWithRetry(ctx, cfg, source, msg); err != nil {
+					return err
+				}
+			}
 			time.Sleep(cfg.RetryBackoff)
 			continue
 		}
 		cfg.log(LogDebug, "bridge sent message key=%s", msg.Key)
 		if cfg.CommitStrategy == CommitOnSuccess || cfg.CommitStrategy == CommitAlways {
-			for {
-				if err := source.Commit(ctx, msg); err != nil {
-					if ctx.Err() != nil {
-						return ctx.Err()
-					}
-					cfg.log(LogError, "bridge commit error: %v", err)
-					time.Sleep(cfg.RetryBackoff)
-					continue
-				}
-				cfg.log(LogDebug, "bridge committed message key=%s", msg.Key)
-				break
+			if err := commitWithRetry(ctx, cfg, source, msg); err != nil {
+				return err
 			}
 		}
 	}
