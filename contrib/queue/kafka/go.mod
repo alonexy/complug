@@ -3,7 +3,7 @@ module github.com/alonexy/complug/contrib/queue/kafka
 go 1.23.2
 
 require (
-	github.com/alonexy/complug/components/queue v0.0.0
+	github.com/alonexy/complug/components/queue v1.0.3
 	github.com/segmentio/kafka-go v0.4.47
 )
 

@@ -3,10 +3,10 @@ module github.com/alonexy/complug/examples/queue-bridge
 go 1.23.2
 
 require (
-	github.com/alonexy/complug/components/queue v0.0.0
-	github.com/alonexy/complug/contrib/queue/bridge v0.0.0
-	github.com/alonexy/complug/contrib/queue/kafka v0.0.0
-	github.com/alonexy/complug/contrib/queue/rabbitmq v0.0.0
+	github.com/alonexy/complug/components/queue v1.0.3
+	github.com/alonexy/complug/contrib/queue/bridge v1.0.3
+	github.com/alonexy/complug/contrib/queue/kafka v1.0.3
+	github.com/alonexy/complug/contrib/queue/rabbitmq v1.0.3
 )
 
 require (
