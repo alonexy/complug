@@ -30,6 +30,18 @@ func TestDefaultConfig(t *testing.T) {
 	if _, ok := cfg.Balancer.(*kafkago.LeastBytes); !ok {
 		t.Fatalf("expected default Balancer=*kafka.LeastBytes, got %T", cfg.Balancer)
 	}
+	if cfg.BatchSize != 10 {
+		t.Fatalf("expected default BatchSize=10, got %d", cfg.BatchSize)
+	}
+	if cfg.BatchTimeout != 3*time.Millisecond {
+		t.Fatalf("expected default BatchTimeout=3ms, got %s", cfg.BatchTimeout)
+	}
+	if cfg.Compression != kafkago.Lz4 {
+		t.Fatalf("expected default Compression=Lz4, got %v", cfg.Compression)
+	}
+	if cfg.RequiredAcks != kafkago.RequireAll {
+		t.Fatalf("expected default RequiredAcks=RequireAll, got %v", cfg.RequiredAcks)
+	}
 }
 
 func TestWithOptionsApplies(t *testing.T) {
@@ -55,6 +67,8 @@ func TestWithOptionsApplies(t *testing.T) {
 		WithBatchSize(8),
 		WithBatchBytes(9),
 		WithBatchTimeout(10*time.Second),
+		WithCompression(kafkago.Snappy),
+		WithRequiredAcks(kafkago.RequireOne),
 		WithAsync(true),
 		WithMaxAttempts(11),
 		WithReconnectBackoff(2*time.Second),
@@ -101,6 +115,9 @@ func TestWithOptionsApplies(t *testing.T) {
 	}
 	if cfg.BatchSize != 8 || cfg.BatchBytes != 9 || cfg.BatchTimeout != 10*time.Second {
 		t.Fatalf("unexpected batch config: %d/%d/%s", cfg.BatchSize, cfg.BatchBytes, cfg.BatchTimeout)
+	}
+	if cfg.Compression != kafkago.Snappy || cfg.RequiredAcks != kafkago.RequireOne {
+		t.Fatalf("unexpected writer config: %v/%v", cfg.Compression, cfg.RequiredAcks)
 	}
 	if !cfg.Async || cfg.MaxAttempts != 11 {
 		t.Fatalf("unexpected async/maxAttempts: %v/%d", cfg.Async, cfg.MaxAttempts)
@@ -177,5 +194,42 @@ func TestDefaultRetryClassifier(t *testing.T) {
 	}
 	if DefaultRetryClassifier(context.Canceled) != true {
 		t.Fatalf("context.Canceled should be retryable by default")
+	}
+}
+
+func TestEnsureWriterAppliesConfig(t *testing.T) {
+	cfg := defaultConfig[struct{}]()
+	WithBrokers("b1")(&cfg)
+	WithTopic("demo")(&cfg)
+	WithBatchSize(12)(&cfg)
+	WithBatchBytes(34)(&cfg)
+	WithBatchTimeout(5 * time.Millisecond)(&cfg)
+	WithCompression(kafkago.Snappy)(&cfg)
+	WithRequiredAcks(kafkago.RequireOne)(&cfg)
+	WithAsync(true)(&cfg)
+	WithMaxAttempts(7)(&cfg)
+
+	typedCfg, err := toTypedConfig[struct{}](cfg)
+	if err != nil {
+		t.Fatalf("toTypedConfig error: %v", err)
+	}
+
+	p := &producer[struct{}]{cfg: typedCfg}
+	writer := p.ensureWriter()
+	t.Cleanup(func() {
+		_ = p.Close()
+	})
+
+	if writer.BatchSize != 12 || writer.BatchBytes != 34 || writer.BatchTimeout != 5*time.Millisecond {
+		t.Fatalf("unexpected writer batch config: %d/%d/%s", writer.BatchSize, writer.BatchBytes, writer.BatchTimeout)
+	}
+	if writer.Compression != kafkago.Snappy {
+		t.Fatalf("expected writer Compression=Snappy, got %v", writer.Compression)
+	}
+	if writer.RequiredAcks != kafkago.RequireOne {
+		t.Fatalf("expected writer RequiredAcks=RequireOne, got %v", writer.RequiredAcks)
+	}
+	if !writer.Async || writer.MaxAttempts != 7 {
+		t.Fatalf("unexpected writer async/maxAttempts: %v/%d", writer.Async, writer.MaxAttempts)
 	}
 }

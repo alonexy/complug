@@ -35,6 +35,8 @@ type Config struct {
 	BatchSize                int
 	BatchBytes               int64
 	BatchTimeout             time.Duration
+	Compression              kafka.Compression
+	RequiredAcks             kafka.RequiredAcks
 	Async                    bool
 	MaxAttempts              int
 	ReconnectBackoff         time.Duration
@@ -280,6 +282,20 @@ func WithBatchTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithCompression 设置 writer 压缩算法。
+func WithCompression(compression kafka.Compression) Option {
+	return func(cfg *runtimeConfig) {
+		cfg.Compression = compression
+	}
+}
+
+// WithRequiredAcks 设置 writer 所需确认级别。
+func WithRequiredAcks(acks kafka.RequiredAcks) Option {
+	return func(cfg *runtimeConfig) {
+		cfg.RequiredAcks = acks
+	}
+}
+
 // WithAsync 设置异步写入。
 func WithAsync(async bool) Option {
 	return func(cfg *runtimeConfig) {
@@ -512,9 +528,11 @@ func defaultConfig[T any]() runtimeConfig {
 			AutoCommitInterval:       0,
 			ReadTimeout:              10 * time.Second,
 			WriteTimeout:             10 * time.Second,
-			BatchSize:                0,
+			BatchSize:                10,
 			BatchBytes:               0,
-			BatchTimeout:             0,
+			BatchTimeout:             3 * time.Millisecond,
+			Compression:              kafka.Lz4,
+			RequiredAcks:             kafka.RequireAll,
 			Async:                    false,
 			MaxAttempts:              0,
 			ReconnectBackoff:         time.Second,
@@ -675,9 +693,10 @@ func (p *producer[T]) ensureWriter() *kafka.Writer {
 			Addr:         kafka.TCP(p.cfg.Brokers...),
 			Topic:        p.cfg.Topic,
 			Balancer:     p.cfg.Balancer,
-			RequiredAcks: kafka.RequireAll,
+			RequiredAcks: p.cfg.RequiredAcks,
 			ReadTimeout:  p.cfg.ReadTimeout,
 			WriteTimeout: p.cfg.WriteTimeout,
+			Compression:  p.cfg.Compression,
 			Transport:    p.cfg.Transport,
 		}
 		if p.cfg.BatchSize > 0 {

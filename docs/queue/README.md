@@ -99,10 +99,19 @@ kafka.WithAutoCommitInterval(2*time.Second),
 ```
 
 ### 3.6 Writer 调优
+
+默认 writer 配置：
+- `BatchSize=10`
+- `BatchTimeout=3*time.Millisecond`
+- `Compression=kafka.Lz4`
+- `RequiredAcks=kafka.RequireAll`
+
 ```go
 kafka.WithBatchSize(100),
 kafka.WithBatchBytes(1048576),
 kafka.WithBatchTimeout(1*time.Second),
+kafka.WithCompression(kafka.Snappy),
+kafka.WithRequiredAcks(kafka.RequireOne),
 kafka.WithAsync(false),
 kafka.WithMaxAttempts(10),
 ```
