@@ -233,3 +233,43 @@ func TestEnsureWriterAppliesConfig(t *testing.T) {
 		t.Fatalf("unexpected writer async/maxAttempts: %v/%d", writer.Async, writer.MaxAttempts)
 	}
 }
+
+func TestEnsureReaderAppliesCommitIntervalWithAutoCommitEnabled(t *testing.T) {
+	cfg := defaultConfig[struct{}]()
+	WithBrokers("b1")(&cfg)
+	WithTopic("demo")(&cfg)
+	WithGroupID("g1")(&cfg)
+	WithEnableAutoCommit(true)(&cfg)
+	WithAutoCommitInterval(2 * time.Second)(&cfg)
+
+	typedCfg, err := toTypedConfig[struct{}](cfg)
+	if err != nil {
+		t.Fatalf("toTypedConfig error: %v", err)
+	}
+
+	c := &consumer[struct{}]{cfg: typedCfg}
+	reader := c.ensureReader()
+	t.Cleanup(func() {
+		_ = c.Close()
+	})
+
+	if got := reader.Config().CommitInterval; got != 2*time.Second {
+		t.Fatalf("expected CommitInterval=2s, got %s", got)
+	}
+}
+
+func TestConsumerStillRequiresExplicitCommitWithAutoCommitEnabled(t *testing.T) {
+	cfg := defaultConfig[struct{}]()
+	WithGroupID("g1")(&cfg)
+	WithEnableAutoCommit(true)(&cfg)
+
+	typedCfg, err := toTypedConfig[struct{}](cfg)
+	if err != nil {
+		t.Fatalf("toTypedConfig error: %v", err)
+	}
+
+	c := &consumer[struct{}]{cfg: typedCfg}
+	if !c.requiresExplicitCommit() {
+		t.Fatalf("EnableAutoCommit should keep explicit Commit semantics")
+	}
+}

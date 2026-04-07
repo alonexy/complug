@@ -742,9 +742,11 @@ func (c *consumer[T]) Receive(ctx context.Context) (queue.Message[T], error) {
 		return queue.Message[T]{}, queue.ErrClosed
 	}
 	attempt := 0
+	var kmsg kafka.Message
+	var err error
 	for {
 		reader := c.ensureReader()
-		kmsg, err := reader.FetchMessage(ctx)
+		kmsg, err = reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return queue.Message[T]{}, ctx.Err()
@@ -785,10 +787,7 @@ func (c *consumer[T]) Commit(ctx context.Context, msg queue.Message[T]) error {
 	if c.closed.Load() {
 		return queue.ErrClosed
 	}
-	if c.cfg.GroupID == "" {
-		return nil
-	}
-	if c.cfg.EnableAutoCommit {
+	if !c.requiresExplicitCommit() {
 		return nil
 	}
 	kmsg, ok := msg.Raw.(kafka.Message)
@@ -822,6 +821,10 @@ func (c *consumer[T]) Channel(ctx context.Context) (<-chan queue.Message[T], <-c
 		}
 	}()
 	return messages, errs
+}
+
+func (c *consumer[T]) requiresExplicitCommit() bool {
+	return c.cfg.GroupID != ""
 }
 
 func (c *consumer[T]) Close() error {
