@@ -12,6 +12,11 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+const (
+	defaultTransportIdleTimeout = 30 * time.Minute
+	defaultTransportMetadataTTL = 10 * time.Minute
+)
+
 // Config holds Kafka-specific configuration.
 type Config struct {
 	Brokers                  []string
@@ -685,9 +690,7 @@ func (p *producer[T]) ensureWriter() *kafka.Writer {
 	defer p.mu.Unlock()
 	if p.writer == nil {
 		if p.cfg.Transport == nil {
-			p.cfg.Transport = &kafka.Transport{
-				ClientID: p.cfg.ClientID,
-			}
+			p.cfg.Transport = defaultTransport(p.cfg.ClientID, p.cfg.Topic)
 		}
 		p.writer = &kafka.Writer{
 			Addr:         kafka.TCP(p.cfg.Brokers...),
@@ -948,7 +951,7 @@ func backoffDuration(base, max time.Duration, attempt int) time.Duration {
 func ensureTopic(cfg runtimeConfig) error {
 	transport := cfg.Transport
 	if transport == nil {
-		transport = &kafka.Transport{ClientID: cfg.ClientID}
+		transport = defaultTransport(cfg.ClientID, cfg.Topic)
 	}
 	if len(cfg.Brokers) == 0 {
 		return errors.New("kafka: brokers not configured")
@@ -1035,9 +1038,7 @@ func dialerFromTransport(transport *kafka.Transport, clientID string) *kafka.Dia
 		return nil
 	}
 	if transport == nil {
-		transport = &kafka.Transport{
-			ClientID: clientID,
-		}
+		transport = defaultTransport(clientID, "")
 	}
 	dialer := &kafka.Dialer{
 		ClientID:      transport.ClientID,
@@ -1052,6 +1053,18 @@ func dialerFromTransport(transport *kafka.Transport, clientID string) *kafka.Dia
 		dialer.DialFunc = transport.Dial
 	}
 	return dialer
+}
+
+func defaultTransport(clientID, topic string) *kafka.Transport {
+	transport := &kafka.Transport{
+		ClientID:    clientID,
+		IdleTimeout: defaultTransportIdleTimeout,
+		MetadataTTL: defaultTransportMetadataTTL,
+	}
+	if topic != "" {
+		transport.MetadataTopics = []string{topic}
+	}
+	return transport
 }
 
 func toTypedConfig[T any](cfg runtimeConfig) (typedConfig[T], error) {

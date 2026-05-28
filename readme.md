@@ -63,9 +63,35 @@ go get github.com/alonexy/complug/contrib/queue/kafka@v1.0.3
 # RabbitMQ 适配
 go get github.com/alonexy/complug/contrib/queue/rabbitmq@v1.0.3
 
+# NATS 适配
+go get github.com/alonexy/complug/contrib/queue/nats@v1.0.3
+
 # Protobuf Codec
 go get github.com/alonexy/complug/contrib/queue/protobuf@v1.0.3
 ```
+
+### 4.2 提交与 Tag 规则
+
+* **提交粒度**：
+    * 每次提交必须只覆盖一个明确主题，优先按模块收敛变更。
+    * 若仅修改单个模块（例如 `contrib/queue/kafka`），提交中不得混入其他模块的无关改动。
+* **提交信息**：
+    * 使用 Conventional Commits 风格，例如：`feat: add kafka writer defaults`、`fix: preserve explicit kafka commit semantics`。
+* **项目级 Tag**：
+    * 仓库根级别维护整体发布版本，格式为 `vX.Y.Z`，例如 `v1.0.5`。
+    * 当本次变更需要对外形成统一版本时，必须补齐对应的项目级 Tag。
+* **模块级 Tag**：
+    * 每个可独立引用的 Go 模块都维护自己的发布 Tag，格式为 `{module-path}/vX.Y.Z`。
+    * 例如：
+        * `components/queue/v1.0.5`
+        * `contrib/queue/kafka/v1.0.5`
+        * `contrib/queue/rabbitmq/v1.0.5`
+* **统一发版原则**：
+    * 若本次发布声明为全项目统一版本，则项目级 Tag 与所有已纳入发布体系的模块级 Tag 必须保持一致版本号。
+    * 若仅发布单个模块，可只创建对应模块 Tag，但仍需确认是否需要同步补齐项目级 Tag。
+* **Tag 指向**：
+    * 项目级 Tag 与本次涉及的模块级 Tag 必须指向同一个已推送的提交。
+    * 禁止在未提交或未推送的工作区状态上创建发布 Tag。
 
 ---
 

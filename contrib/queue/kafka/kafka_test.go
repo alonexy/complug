@@ -234,6 +234,67 @@ func TestEnsureWriterAppliesConfig(t *testing.T) {
 	}
 }
 
+func TestEnsureWriterCreatesDefaultTransport(t *testing.T) {
+	cfg := defaultConfig[struct{}]()
+	WithBrokers("b1")(&cfg)
+	WithTopic("demo")(&cfg)
+	WithClientID("client-1")(&cfg)
+
+	typedCfg, err := toTypedConfig[struct{}](cfg)
+	if err != nil {
+		t.Fatalf("toTypedConfig error: %v", err)
+	}
+
+	p := &producer[struct{}]{cfg: typedCfg}
+	writer := p.ensureWriter()
+	t.Cleanup(func() {
+		_ = p.Close()
+	})
+
+	transport, ok := writer.Transport.(*kafkago.Transport)
+	if !ok {
+		t.Fatalf("expected writer transport *kafka.Transport, got %T", writer.Transport)
+	}
+	if transport.ClientID != "client-1" {
+		t.Fatalf("expected ClientID=client-1, got %q", transport.ClientID)
+	}
+	if transport.IdleTimeout != 30*time.Minute {
+		t.Fatalf("expected IdleTimeout=30m, got %s", transport.IdleTimeout)
+	}
+	if transport.MetadataTTL != 10*time.Minute {
+		t.Fatalf("expected MetadataTTL=10m, got %s", transport.MetadataTTL)
+	}
+	if len(transport.MetadataTopics) != 1 || transport.MetadataTopics[0] != "demo" {
+		t.Fatalf("expected MetadataTopics=[demo], got %#v", transport.MetadataTopics)
+	}
+}
+
+func TestEnsureWriterUsesCustomTransport(t *testing.T) {
+	cfg := defaultConfig[struct{}]()
+	WithBrokers("b1")(&cfg)
+	WithTopic("demo")(&cfg)
+	custom := &kafkago.Transport{
+		ClientID:    "custom",
+		IdleTimeout: time.Minute,
+	}
+	WithTransport(custom)(&cfg)
+
+	typedCfg, err := toTypedConfig[struct{}](cfg)
+	if err != nil {
+		t.Fatalf("toTypedConfig error: %v", err)
+	}
+
+	p := &producer[struct{}]{cfg: typedCfg}
+	writer := p.ensureWriter()
+	t.Cleanup(func() {
+		_ = p.Close()
+	})
+
+	if writer.Transport != custom {
+		t.Fatalf("expected custom transport to be used")
+	}
+}
+
 func TestEnsureReaderAppliesCommitIntervalWithAutoCommitEnabled(t *testing.T) {
 	cfg := defaultConfig[struct{}]()
 	WithBrokers("b1")(&cfg)
