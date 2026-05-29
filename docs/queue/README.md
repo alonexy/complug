@@ -280,6 +280,7 @@ nats.WithDuplicateWindow(2*time.Minute),
 nats.WithAckWait(60*time.Second),
 nats.WithMaxDeliver(10),
 nats.WithDoubleAck(true),
+nats.WithWarmUp(true),
 nats.WithAsyncPublish(true),
 nats.WithAsyncPublishAckHandler(func(future jetstream.PubAckFuture) {
     select {
@@ -294,6 +295,23 @@ nats.WithAsyncPublishAckHandler(func(future jetstream.PubAckFuture) {
 `WithMsgIDFromKey(true)` 会把 `queue.Message.Key` 写入 `Nats-Msg-Id` header，用于 JetStream 去重窗口内的重复发布检测。`WithDoubleAck(true)` 会在 `Commit` 时等待服务端确认 ack，可靠性更强但吞吐更低。
 
 `WithAsyncPublish(true)` 会让 JetStream Producer 使用 `PublishMsgAsync`。此时 `Producer.Send` 只返回 async publish 请求创建阶段的错误，不等待服务端 ack。适配器默认会在后台等待 future 并打印 ack/error 日志；如果业务需要自定义指标、告警或失败处理，可以用 `WithAsyncPublishAckHandler` 覆盖默认 handler。
+
+`WithWarmUp(true)` 是默认行为。`NewNATSProvider` / `NewNATSProducer` 会在构造阶段建立 NATS 连接；JetStream 模式还会创建 JetStream context，并在开启 `WithAutoCreateStream(true)` 时提前创建或更新 stream。若需要延迟连接，可使用 `WithWarmUp(false)`，之后通过类型断言调用 NATS 专用 `WarmUp(ctx)`：
+
+```go
+provider, err := nats.NewNATSProvider[Payload](
+    nats.WithWarmUp(false),
+    // ...
+)
+if err != nil {
+    return err
+}
+if warm, ok := provider.(interface{ WarmUp(context.Context) error }); ok {
+    if err := warm.WarmUp(ctx); err != nil {
+        return err
+    }
+}
+```
 
 ### 5.3 认证
 

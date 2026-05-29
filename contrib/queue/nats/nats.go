@@ -87,6 +87,7 @@ type Config struct {
 	MsgIDFromKey           bool
 	AsyncPublish           bool
 	AsyncPublishAckHandler func(jetstream.PubAckFuture)
+	WarmUp                 bool
 	AuthUser               string
 	AuthPassword           string
 	AuthToken              string
@@ -374,6 +375,13 @@ func WithAsyncPublishAckHandler(handler func(jetstream.PubAckFuture)) Option {
 	}
 }
 
+// WithWarmUp sets whether provider construction establishes the NATS connection eagerly.
+func WithWarmUp(enabled bool) Option {
+	return func(cfg *runtimeConfig) {
+		cfg.WarmUp = enabled
+	}
+}
+
 // WithAuthUserInfo 设置用户名密码认证。
 func WithAuthUserInfo(user, password string) Option {
 	return func(cfg *runtimeConfig) {
@@ -454,6 +462,7 @@ func defaultConfig[T any]() runtimeConfig {
 			ReconnectBackoff:    time.Second,
 			ReconnectMaxBackoff: 30 * time.Second,
 			ReconnectForever:    true,
+			WarmUp:              true,
 			Logger:              func(string, ...any) {},
 		},
 		Encoder: queue.JSONCodec[T]{},
@@ -496,7 +505,15 @@ func NewNATSProvider[T any](opts ...Option) (queue.Provider[T], error) {
 	sess := &session{cfg: typedCfg.Config}
 	prod := &producer[T]{cfg: typedCfg, session: sess}
 	cons := &consumer[T]{cfg: typedCfg, session: sess}
-	return &provider[T]{producer: prod, consumer: cons}, nil
+	provider := &provider[T]{producer: prod, consumer: cons}
+	if typedCfg.WarmUp {
+		ctx, cancel := context.WithTimeout(context.Background(), typedCfg.DialTimeout)
+		defer cancel()
+		if err := provider.WarmUp(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return provider, nil
 }
 
 type provider[T any] struct {
@@ -506,6 +523,11 @@ type provider[T any] struct {
 
 func (p *provider[T]) Producer() queue.Producer[T] { return p.producer }
 func (p *provider[T]) Consumer() queue.Consumer[T] { return p.consumer }
+
+// WarmUp eagerly establishes the shared NATS connection and JetStream context.
+func (p *provider[T]) WarmUp(ctx context.Context) error {
+	return p.producer.WarmUp(ctx)
+}
 
 // NewNATSProducer creates a NATS producer only.
 func NewNATSProducer[T any](opts ...Option) (queue.Producer[T], error) {
@@ -671,6 +693,19 @@ type producer[T any] struct {
 	cfg     typedConfig[T]
 	session *session
 	closed  atomic.Bool
+}
+
+// WarmUp eagerly establishes the producer's NATS connection and JetStream context.
+func (p *producer[T]) WarmUp(ctx context.Context) error {
+	if p.closed.Load() {
+		return queue.ErrClosed
+	}
+	if p.cfg.Mode == Core {
+		_, err := p.session.ensureConn()
+		return err
+	}
+	_, err := p.session.ensureJetStream(ctx)
+	return err
 }
 
 func (p *producer[T]) Send(ctx context.Context, msg queue.Message[T]) error {

@@ -287,6 +287,47 @@ func TestDefaultAsyncPublishAckHandlerDrainsResult(t *testing.T) {
 	cfg.AsyncPublishAckHandler(future)
 }
 
+func TestNewNATSProviderWarmsUpByDefault(t *testing.T) {
+	_, err := NewNATSProvider[integrationPayload](
+		WithURL("nats://127.0.0.1:1"),
+		WithSubject("events.created"),
+		WithStream("EVENTS"),
+		WithDurable("events-worker"),
+		WithDialTimeout(10*time.Millisecond),
+		WithCodec[integrationPayload](queue.JSONCodec[integrationPayload]{}),
+	)
+	if err == nil {
+		t.Fatalf("expected default warm up to return connection error")
+	}
+}
+
+func TestWarmUpCanBeCalledExplicitly(t *testing.T) {
+	provider, err := NewNATSProvider[integrationPayload](
+		WithURL("nats://127.0.0.1:1"),
+		WithSubject("events.created"),
+		WithStream("EVENTS"),
+		WithDurable("events-worker"),
+		WithDialTimeout(10*time.Millisecond),
+		WithWarmUp(false),
+		WithCodec[integrationPayload](queue.JSONCodec[integrationPayload]{}),
+	)
+	if err != nil {
+		t.Fatalf("provider should not connect when warm up is disabled: %v", err)
+	}
+
+	warm, ok := provider.(interface {
+		WarmUp(context.Context) error
+	})
+	if !ok {
+		t.Fatalf("provider should expose WarmUp")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := warm.WarmUp(ctx); err == nil {
+		t.Fatalf("expected explicit warm up to return connection error")
+	}
+}
+
 func TestJetStreamPushConsumerWithoutDeliverGroupFanOut(t *testing.T) {
 	stream, subject, suffix := uniqueStreamSubject("fanout")
 	deleteLocalStream(t, stream)
@@ -376,6 +417,83 @@ func TestJetStreamPushConsumerWithDeliverGroupLoadBalances(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatalf("timed out waiting for grouped messages; seen=%v", seen)
 		}
+	}
+}
+
+func TestJetStreamProducerSendElapsed(t *testing.T) {
+	tests := []struct {
+		name         string
+		asyncPublish bool
+	}{
+		{name: "sync", asyncPublish: false},
+		{name: "async", asyncPublish: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream, subject, suffix := uniqueStreamSubject("send_elapsed_" + tt.name)
+			deleteLocalStream(t, stream)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			provider, err := NewNATSProvider[integrationPayload](
+				WithMode(JetStream),
+				WithURL(localIntegrationURL),
+				WithStream(stream),
+				WithSubjects(subject),
+				WithSubject(subject),
+				WithDurable("send-elapsed-"+suffix),
+				WithFilterSubject(subject),
+				WithAutoCreateStream(true),
+				WithMsgIDFromKey(true),
+				WithAsyncPublish(tt.asyncPublish),
+				WithCodec[integrationPayload](queue.JSONCodec[integrationPayload]{}),
+			)
+			if err != nil {
+				t.Fatalf("provider error: %v", err)
+			}
+			defer provider.Consumer().Close()
+			defer provider.Producer().Close()
+
+			const count = 10
+			var total time.Duration
+			var warmTotal time.Duration
+			var min time.Duration
+			var max time.Duration
+			for i := 0; i < count; i++ {
+				id := fmt.Sprintf("send-elapsed-%s-%d", tt.name, i)
+				start := time.Now()
+				if err := provider.Producer().Send(ctx, queue.Message[integrationPayload]{
+					Key:   id,
+					Value: integrationPayload{ID: id},
+				}); err != nil {
+					t.Fatalf("send %s error: %v", id, err)
+				}
+				elapsed := time.Since(start)
+				total += elapsed
+				if i == 0 || elapsed < min {
+					min = elapsed
+				}
+				if elapsed > max {
+					max = elapsed
+				}
+				if i > 0 {
+					warmTotal += elapsed
+				}
+				t.Logf("Producer.Send async=%v %s elapsed=%s", tt.asyncPublish, id, elapsed)
+			}
+			t.Logf(
+				"Producer.Send async=%v count=%d total=%s average=%s warm_average=%s min=%s max=%s",
+				tt.asyncPublish,
+				count,
+				total,
+				total/count,
+				warmTotal/(count-1),
+				min,
+				max,
+			)
+		})
 	}
 }
 
