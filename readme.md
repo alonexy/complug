@@ -64,7 +64,7 @@ go get github.com/alonexy/complug/contrib/queue/kafka@v1.0.7
 go get github.com/alonexy/complug/contrib/queue/rabbitmq@v1.0.7
 
 # NATS 适配
-go get github.com/alonexy/complug/contrib/queue/nats@v1.0.7
+go get github.com/alonexy/complug/contrib/queue/nats@v1.0.8
 
 # Protobuf Codec
 go get github.com/alonexy/complug/contrib/queue/protobuf@v1.0.7
