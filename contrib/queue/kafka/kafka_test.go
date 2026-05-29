@@ -42,6 +42,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.RequiredAcks != kafkago.RequireAll {
 		t.Fatalf("expected default RequiredAcks=RequireAll, got %v", cfg.RequiredAcks)
 	}
+	if !cfg.WarmUp {
+		t.Fatalf("expected default WarmUp=true")
+	}
 }
 
 func TestWithOptionsApplies(t *testing.T) {
@@ -80,6 +83,7 @@ func TestWithOptionsApplies(t *testing.T) {
 		WithTopicReplication(2),
 		WithTopicConfig("cleanup.policy", "delete"),
 		WithApplyTopicConfigOnExists(true),
+		WithWarmUp(false),
 	)
 	opt(&cfg)
 
@@ -137,6 +141,9 @@ func TestWithOptionsApplies(t *testing.T) {
 	if !cfg.ApplyTopicConfigOnExists {
 		t.Fatalf("expected ApplyTopicConfigOnExists=true")
 	}
+	if cfg.WarmUp {
+		t.Fatalf("expected WarmUp=false")
+	}
 }
 
 func TestWithBrokersCopies(t *testing.T) {
@@ -182,6 +189,76 @@ func TestToTypedConfigMismatch(t *testing.T) {
 	_, err := toTypedConfig[string](cfg)
 	if err == nil {
 		t.Fatalf("expected encoder type mismatch error")
+	}
+}
+
+func TestNewKafkaProviderWarmsUpByDefault(t *testing.T) {
+	_, err := NewKafkaProvider[struct{}](
+		WithBrokers("127.0.0.1:1"),
+		WithTopic("events"),
+		WithWriteTimeout(10*time.Millisecond),
+	)
+	if err == nil {
+		t.Fatalf("expected default warm up to return connection error")
+	}
+}
+
+func TestKafkaWarmUpCanBeCalledExplicitly(t *testing.T) {
+	provider, err := NewKafkaProvider[struct{}](
+		WithBrokers("127.0.0.1:1"),
+		WithTopic("events"),
+		WithWriteTimeout(10*time.Millisecond),
+		WithWarmUp(false),
+	)
+	if err != nil {
+		t.Fatalf("provider should not connect when warm up is disabled: %v", err)
+	}
+
+	warm, ok := provider.(interface {
+		WarmUp(context.Context) error
+	})
+	if !ok {
+		t.Fatalf("provider should expose WarmUp")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := warm.WarmUp(ctx); err == nil {
+		t.Fatalf("expected explicit warm up to return connection error")
+	}
+}
+
+func TestNewKafkaProducerWarmsUpByDefault(t *testing.T) {
+	_, err := NewKafkaProducer[struct{}](
+		WithBrokers("127.0.0.1:1"),
+		WithTopic("events"),
+		WithWriteTimeout(10*time.Millisecond),
+	)
+	if err == nil {
+		t.Fatalf("expected default producer warm up to return connection error")
+	}
+}
+
+func TestKafkaProducerWarmUpRejectsClosedProducer(t *testing.T) {
+	producer, err := NewKafkaProducer[struct{}](
+		WithBrokers("127.0.0.1:1"),
+		WithTopic("events"),
+		WithWarmUp(false),
+	)
+	if err != nil {
+		t.Fatalf("producer should not connect when warm up is disabled: %v", err)
+	}
+	if err := producer.Close(); err != nil {
+		t.Fatalf("close producer: %v", err)
+	}
+
+	warm, ok := producer.(interface {
+		WarmUp(context.Context) error
+	})
+	if !ok {
+		t.Fatalf("producer should expose WarmUp")
+	}
+	if err := warm.WarmUp(context.Background()); !errors.Is(err, queue.ErrClosed) {
+		t.Fatalf("expected ErrClosed, got %v", err)
 	}
 }
 

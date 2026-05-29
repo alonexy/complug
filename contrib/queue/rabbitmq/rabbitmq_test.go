@@ -1,6 +1,8 @@
 package rabbitmq
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -28,6 +30,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.DecodeErrorStrategy != DecodeErrorReturn {
 		t.Fatalf("expected default DecodeErrorStrategy=DecodeErrorReturn, got %v", cfg.DecodeErrorStrategy)
 	}
+	if !cfg.WarmUp {
+		t.Fatalf("expected default WarmUp=true")
+	}
 }
 
 func TestWithOptionsApplies(t *testing.T) {
@@ -51,6 +56,7 @@ func TestWithOptionsApplies(t *testing.T) {
 		WithReconnectForever(false),
 		WithMaxRetries(5),
 		WithDecodeErrorStrategy(DecodeErrorNackDrop),
+		WithWarmUp(false),
 	)
 	opt(&cfg)
 
@@ -81,6 +87,9 @@ func TestWithOptionsApplies(t *testing.T) {
 	if cfg.DecodeErrorStrategy != DecodeErrorNackDrop {
 		t.Fatalf("unexpected decode error strategy: %v", cfg.DecodeErrorStrategy)
 	}
+	if cfg.WarmUp {
+		t.Fatalf("expected WarmUp=false")
+	}
 }
 
 func TestWithArgsApplies(t *testing.T) {
@@ -108,5 +117,71 @@ func TestToTypedConfigMismatch(t *testing.T) {
 	_, err := toTypedConfig[string](cfg)
 	if err == nil {
 		t.Fatalf("expected decoder type mismatch error")
+	}
+}
+
+func TestNewRabbitProviderWarmsUpByDefault(t *testing.T) {
+	_, err := NewRabbitProvider[struct{}](
+		WithURL("amqp://guest:guest@127.0.0.1:1/"),
+		WithDialTimeout(10*time.Millisecond),
+	)
+	if err == nil {
+		t.Fatalf("expected default warm up to return connection error")
+	}
+}
+
+func TestRabbitWarmUpCanBeCalledExplicitly(t *testing.T) {
+	provider, err := NewRabbitProvider[struct{}](
+		WithURL("amqp://guest:guest@127.0.0.1:1/"),
+		WithDialTimeout(10*time.Millisecond),
+		WithWarmUp(false),
+	)
+	if err != nil {
+		t.Fatalf("provider should not connect when warm up is disabled: %v", err)
+	}
+
+	warm, ok := provider.(interface {
+		WarmUp(context.Context) error
+	})
+	if !ok {
+		t.Fatalf("provider should expose WarmUp")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := warm.WarmUp(ctx); err == nil {
+		t.Fatalf("expected explicit warm up to return connection error")
+	}
+}
+
+func TestNewRabbitProducerWarmsUpByDefault(t *testing.T) {
+	_, err := NewRabbitProducer[struct{}](
+		WithURL("amqp://guest:guest@127.0.0.1:1/"),
+		WithDialTimeout(10*time.Millisecond),
+	)
+	if err == nil {
+		t.Fatalf("expected default producer warm up to return connection error")
+	}
+}
+
+func TestRabbitProducerWarmUpRejectsClosedProducer(t *testing.T) {
+	producer, err := NewRabbitProducer[struct{}](
+		WithURL("amqp://guest:guest@127.0.0.1:1/"),
+		WithWarmUp(false),
+	)
+	if err != nil {
+		t.Fatalf("producer should not connect when warm up is disabled: %v", err)
+	}
+	if err := producer.Close(); err != nil {
+		t.Fatalf("close producer: %v", err)
+	}
+
+	warm, ok := producer.(interface {
+		WarmUp(context.Context) error
+	})
+	if !ok {
+		t.Fatalf("producer should expose WarmUp")
+	}
+	if err := warm.WarmUp(context.Background()); !errors.Is(err, queue.ErrClosed) {
+		t.Fatalf("expected ErrClosed, got %v", err)
 	}
 }

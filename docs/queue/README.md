@@ -119,6 +119,7 @@ kafka.WithCompression(kafka.Snappy),
 kafka.WithRequiredAcks(kafka.RequireOne),
 kafka.WithAsync(false),
 kafka.WithMaxAttempts(10),
+kafka.WithWarmUp(true),
 ```
 
 ### 3.7 Transport / Topic 配置
@@ -142,6 +143,8 @@ kafka.WithSegmentBytes(1073741824),     // 1 GB segment
 kafka.WithCleanupPolicy("delete"),      // delete / compact
 kafka.WithApplyTopicConfigOnExists(true),
 ```
+
+`WithWarmUp(true)` 是默认行为。`NewKafkaProvider` / `NewKafkaProducer` 会在构造阶段创建 writer 并发起 Kafka metadata 请求，以提前完成 broker 连接、TLS/SASL 与 topic metadata 获取；它不会发送业务消息。若需要延迟连接，可使用 `WithWarmUp(false)`，之后通过类型断言调用 Kafka 专用 `WarmUp(ctx)`。
 
 ## 4. RabbitMQ 使用
 
@@ -197,6 +200,8 @@ rabbitmq.WithRetryClassifier(func(err error) bool {
     return !strings.Contains(err.Error(), "ACCESS_REFUSED")
 }),
 ```
+
+`WithWarmUp(true)` 是默认行为。`NewRabbitProvider` / `NewRabbitProducer` 会在构造阶段建立 RabbitMQ 连接和 channel，并按配置提前声明 exchange、queue 和 binding。若需要延迟连接，可使用 `WithWarmUp(false)`，之后通过类型断言调用 RabbitMQ 专用 `WarmUp(ctx)`。
 
 ## 5. NATS 使用
 

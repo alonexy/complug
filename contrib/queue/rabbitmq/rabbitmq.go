@@ -37,6 +37,7 @@ type Config struct {
 	ExchangeArgs        amqp.Table
 	QueueArgs           amqp.Table
 	BindingArgs         amqp.Table
+	WarmUp              bool
 	Logger              func(format string, args ...any)
 }
 
@@ -222,6 +223,13 @@ func WithDecodeErrorStrategy(strategy DecodeErrorStrategy) Option {
 	}
 }
 
+// WithWarmUp sets whether provider construction establishes the RabbitMQ connection eagerly.
+func WithWarmUp(enabled bool) Option {
+	return func(cfg *runtimeConfig) {
+		cfg.WarmUp = enabled
+	}
+}
+
 // WithReconnectForever 设置是否无限重连。
 func WithReconnectForever(enabled bool) Option {
 	return func(cfg *runtimeConfig) {
@@ -293,6 +301,7 @@ func defaultConfig[T any]() runtimeConfig {
 			MaxRetries:          0,
 			RetryClassifier:     nil,
 			DecodeErrorStrategy: DecodeErrorReturn,
+			WarmUp:              true,
 			Logger:              func(string, ...any) {},
 		},
 		Encoder: queue.JSONCodec[T]{},
@@ -324,7 +333,15 @@ func NewRabbitProvider[T any](opts ...Option) (queue.Provider[T], error) {
 	sess := &session[T]{cfg: typedCfg}
 	prod := &producer[T]{cfg: typedCfg, session: sess}
 	cons := &consumer[T]{cfg: typedCfg, session: sess}
-	return &provider[T]{producer: prod, consumer: cons}, nil
+	provider := &provider[T]{producer: prod, consumer: cons}
+	if typedCfg.WarmUp {
+		ctx, cancel := context.WithTimeout(context.Background(), typedCfg.DialTimeout)
+		defer cancel()
+		if err := provider.WarmUp(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return provider, nil
 }
 
 type provider[T any] struct {
@@ -334,6 +351,11 @@ type provider[T any] struct {
 
 func (p *provider[T]) Producer() queue.Producer[T] { return p.producer }
 func (p *provider[T]) Consumer() queue.Consumer[T] { return p.consumer }
+
+// WarmUp eagerly establishes the shared RabbitMQ connection and channel.
+func (p *provider[T]) WarmUp(ctx context.Context) error {
+	return p.producer.WarmUp(ctx)
+}
 
 // NewRabbitProducer creates a RabbitMQ producer only.
 func NewRabbitProducer[T any](opts ...Option) (queue.Producer[T], error) {
@@ -446,6 +468,18 @@ type producer[T any] struct {
 	cfg     typedConfig[T]
 	session *session[T]
 	closed  atomic.Bool
+}
+
+// WarmUp eagerly establishes the producer's RabbitMQ connection and channel.
+func (p *producer[T]) WarmUp(ctx context.Context) error {
+	if p.closed.Load() {
+		return queue.ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := p.session.ensureChannel()
+	return err
 }
 
 func (p *producer[T]) Send(ctx context.Context, msg queue.Message[T]) error {

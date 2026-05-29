@@ -328,6 +328,47 @@ func TestWarmUpCanBeCalledExplicitly(t *testing.T) {
 	}
 }
 
+func TestNewNATSProducerWarmsUpByDefault(t *testing.T) {
+	_, err := NewNATSProducer[integrationPayload](
+		WithURL("nats://127.0.0.1:1"),
+		WithSubject("events.created"),
+		WithStream("EVENTS"),
+		WithDurable("events-worker"),
+		WithDialTimeout(10*time.Millisecond),
+		WithCodec[integrationPayload](queue.JSONCodec[integrationPayload]{}),
+	)
+	if err == nil {
+		t.Fatalf("expected default producer warm up to return connection error")
+	}
+}
+
+func TestNATSProducerWarmUpRejectsClosedProducer(t *testing.T) {
+	producer, err := NewNATSProducer[integrationPayload](
+		WithURL("nats://127.0.0.1:1"),
+		WithSubject("events.created"),
+		WithStream("EVENTS"),
+		WithDurable("events-worker"),
+		WithWarmUp(false),
+		WithCodec[integrationPayload](queue.JSONCodec[integrationPayload]{}),
+	)
+	if err != nil {
+		t.Fatalf("producer should not connect when warm up is disabled: %v", err)
+	}
+	if err := producer.Close(); err != nil {
+		t.Fatalf("close producer: %v", err)
+	}
+
+	warm, ok := producer.(interface {
+		WarmUp(context.Context) error
+	})
+	if !ok {
+		t.Fatalf("producer should expose WarmUp")
+	}
+	if err := warm.WarmUp(context.Background()); !errors.Is(err, queue.ErrClosed) {
+		t.Fatalf("expected ErrClosed, got %v", err)
+	}
+}
+
 func TestJetStreamPushConsumerWithoutDeliverGroupFanOut(t *testing.T) {
 	stream, subject, suffix := uniqueStreamSubject("fanout")
 	deleteLocalStream(t, stream)

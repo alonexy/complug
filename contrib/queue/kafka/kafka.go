@@ -56,6 +56,7 @@ type Config struct {
 	ApplyTopicConfigOnExists bool
 	Balancer                 kafka.Balancer
 	Transport                *kafka.Transport
+	WarmUp                   bool
 	Logger                   func(format string, args ...any)
 }
 
@@ -317,6 +318,13 @@ func WithMaxAttempts(attempts int) Option {
 	}
 }
 
+// WithWarmUp sets whether provider construction establishes the Kafka transport eagerly.
+func WithWarmUp(enabled bool) Option {
+	return func(cfg *runtimeConfig) {
+		cfg.WarmUp = enabled
+	}
+}
+
 // WithReconnectBackoff 设置重连退避初始间隔。
 func WithReconnectBackoff(backoff time.Duration) Option {
 	return func(cfg *runtimeConfig) {
@@ -551,6 +559,7 @@ func defaultConfig[T any]() runtimeConfig {
 			TopicConfigs:             nil,
 			ApplyTopicConfigOnExists: false,
 			Balancer:                 &kafka.LeastBytes{},
+			WarmUp:                   true,
 			Logger:                   func(string, ...any) {},
 		},
 		Encoder: queue.JSONCodec[T]{},
@@ -589,7 +598,15 @@ func NewKafkaProvider[T any](opts ...Option) (queue.Provider[T], error) {
 	}
 	prod := &producer[T]{cfg: typedCfg}
 	cons := &consumer[T]{cfg: typedCfg}
-	return &provider[T]{producer: prod, consumer: cons}, nil
+	provider := &provider[T]{producer: prod, consumer: cons}
+	if typedCfg.WarmUp {
+		ctx, cancel := context.WithTimeout(context.Background(), typedCfg.WriteTimeout)
+		defer cancel()
+		if err := provider.WarmUp(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return provider, nil
 }
 
 type provider[T any] struct {
@@ -599,6 +616,11 @@ type provider[T any] struct {
 
 func (p *provider[T]) Producer() queue.Producer[T] { return p.producer }
 func (p *provider[T]) Consumer() queue.Consumer[T] { return p.consumer }
+
+// WarmUp eagerly establishes Kafka transport metadata for the configured topic.
+func (p *provider[T]) WarmUp(ctx context.Context) error {
+	return p.producer.WarmUp(ctx)
+}
 
 // NewKafkaProducer creates a Kafka producer only.
 func NewKafkaProducer[T any](opts ...Option) (queue.Producer[T], error) {
@@ -623,6 +645,23 @@ type producer[T any] struct {
 	mu     sync.Mutex
 	writer *kafka.Writer
 	closed atomic.Bool
+}
+
+// WarmUp eagerly establishes Kafka transport metadata for the configured topic.
+func (p *producer[T]) WarmUp(ctx context.Context) error {
+	if p.closed.Load() {
+		return queue.ErrClosed
+	}
+	p.ensureWriter()
+	client := &kafka.Client{
+		Addr:      kafka.TCP(p.cfg.Brokers...),
+		Timeout:   p.cfg.WriteTimeout,
+		Transport: p.cfg.Transport,
+	}
+	_, err := client.Metadata(ctx, &kafka.MetadataRequest{
+		Topics: []string{p.cfg.Topic},
+	})
+	return err
 }
 
 func (p *producer[T]) Send(ctx context.Context, msg queue.Message[T]) error {
