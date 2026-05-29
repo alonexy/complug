@@ -148,7 +148,7 @@ func TestAuthOptionsAreSemanticAndExclusive(t *testing.T) {
 	cfg := defaultConfig[struct{}]()
 	WithAuthUserInfo("user", "pass")(&cfg)
 	WithAuthToken("token")(&cfg)
-	if err := validateConfig(cfg); !errors.Is(err, ErrAuthConflict) {
+	if err := validateProviderConfig(cfg); !errors.Is(err, ErrAuthConflict) {
 		t.Fatalf("expected ErrAuthConflict, got %v", err)
 	}
 }
@@ -156,13 +156,13 @@ func TestAuthOptionsAreSemanticAndExclusive(t *testing.T) {
 func TestValidateAuthRejectsEmptyValues(t *testing.T) {
 	cfg := defaultConfig[struct{}]()
 	WithAuthUserInfo("", "pass")(&cfg)
-	if err := validateConfig(cfg); !errors.Is(err, ErrInvalidAuth) {
+	if err := validateProviderConfig(cfg); !errors.Is(err, ErrInvalidAuth) {
 		t.Fatalf("expected ErrInvalidAuth for empty user, got %v", err)
 	}
 
 	cfg = defaultConfig[struct{}]()
 	WithAuthToken("")(&cfg)
-	if err := validateConfig(cfg); !errors.Is(err, ErrInvalidAuth) {
+	if err := validateProviderConfig(cfg); !errors.Is(err, ErrInvalidAuth) {
 		t.Fatalf("expected ErrInvalidAuth for empty token, got %v", err)
 	}
 }
@@ -170,15 +170,44 @@ func TestValidateAuthRejectsEmptyValues(t *testing.T) {
 func TestValidateModeSpecificRequiredFields(t *testing.T) {
 	coreCfg := defaultConfig[struct{}]()
 	WithMode(Core)(&coreCfg)
-	if err := validateConfig(coreCfg); !errors.Is(err, ErrSubjectRequired) {
+	if err := validateProviderConfig(coreCfg); !errors.Is(err, ErrSubjectRequired) {
 		t.Fatalf("expected ErrSubjectRequired for core mode, got %v", err)
 	}
 
 	jsCfg := defaultConfig[struct{}]()
 	WithMode(JetStream)(&jsCfg)
 	WithSubject("events.created")(&jsCfg)
-	if err := validateConfig(jsCfg); !errors.Is(err, ErrStreamRequired) {
+	if err := validateProviderConfig(jsCfg); !errors.Is(err, ErrStreamRequired) {
 		t.Fatalf("expected ErrStreamRequired for jetstream mode, got %v", err)
+	}
+}
+
+func TestProducerDoesNotRequireDurable(t *testing.T) {
+	producer, err := NewNATSProducer[integrationPayload](
+		WithURL("nats://127.0.0.1:1"),
+		WithSubject("events.created"),
+		WithStream("EVENTS"),
+		WithWarmUp(false),
+		WithCodec[integrationPayload](queue.JSONCodec[integrationPayload]{}),
+	)
+	if err != nil {
+		t.Fatalf("producer should not require durable: %v", err)
+	}
+	if err := producer.Close(); err != nil {
+		t.Fatalf("close producer: %v", err)
+	}
+}
+
+func TestConsumerRequiresDurable(t *testing.T) {
+	_, err := NewNATSConsumer[integrationPayload](
+		WithURL("nats://127.0.0.1:1"),
+		WithSubject("events.created"),
+		WithStream("EVENTS"),
+		WithWarmUp(false),
+		WithCodec[integrationPayload](queue.JSONCodec[integrationPayload]{}),
+	)
+	if !errors.Is(err, ErrDurableRequired) {
+		t.Fatalf("expected ErrDurableRequired, got %v", err)
 	}
 }
 

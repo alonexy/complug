@@ -489,29 +489,17 @@ func (cfg runtimeConfig) defaultAsyncPublishAckHandler(future jetstream.PubAckFu
 
 // NewNATSProvider creates a NATS provider implementing queue.Provider.
 func NewNATSProvider[T any](opts ...Option) (queue.Provider[T], error) {
-	cfg := defaultConfig[T]()
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&cfg)
-		}
-	}
-	typedCfg, err := toTypedConfig[T](cfg)
+	cfg, typedCfg, err := buildTypedConfig[T](opts...)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateConfig(cfg); err != nil {
+	if err := validateProviderConfig(cfg); err != nil {
 		return nil, err
 	}
-	sess := &session{cfg: typedCfg.Config}
-	prod := &producer[T]{cfg: typedCfg, session: sess}
-	cons := &consumer[T]{cfg: typedCfg, session: sess}
+	prod, cons := newEndpoints(typedCfg)
 	provider := &provider[T]{producer: prod, consumer: cons}
-	if typedCfg.WarmUp {
-		ctx, cancel := context.WithTimeout(context.Background(), typedCfg.DialTimeout)
-		defer cancel()
-		if err := provider.WarmUp(ctx); err != nil {
-			return nil, err
-		}
+	if err := warmUpIfEnabled(typedCfg, provider.WarmUp); err != nil {
+		return nil, err
 	}
 	return provider, nil
 }
@@ -531,20 +519,62 @@ func (p *provider[T]) WarmUp(ctx context.Context) error {
 
 // NewNATSProducer creates a NATS producer only.
 func NewNATSProducer[T any](opts ...Option) (queue.Producer[T], error) {
-	provider, err := NewNATSProvider[T](opts...)
+	cfg, typedCfg, err := buildTypedConfig[T](opts...)
 	if err != nil {
 		return nil, err
 	}
-	return provider.Producer(), nil
+	if err := validateProducerConfig(cfg); err != nil {
+		return nil, err
+	}
+	prod, _ := newEndpoints(typedCfg)
+	if err := warmUpIfEnabled(typedCfg, prod.WarmUp); err != nil {
+		return nil, err
+	}
+	return prod, nil
 }
 
 // NewNATSConsumer creates a NATS consumer only.
 func NewNATSConsumer[T any](opts ...Option) (queue.Consumer[T], error) {
-	provider, err := NewNATSProvider[T](opts...)
+	cfg, typedCfg, err := buildTypedConfig[T](opts...)
 	if err != nil {
 		return nil, err
 	}
-	return provider.Consumer(), nil
+	if err := validateConsumerConfig(cfg); err != nil {
+		return nil, err
+	}
+	_, cons := newEndpoints(typedCfg)
+	if err := warmUpIfEnabled(typedCfg, cons.WarmUp); err != nil {
+		return nil, err
+	}
+	return cons, nil
+}
+
+func buildTypedConfig[T any](opts ...Option) (runtimeConfig, typedConfig[T], error) {
+	cfg := defaultConfig[T]()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	typedCfg, err := toTypedConfig[T](cfg)
+	if err != nil {
+		return cfg, typedConfig[T]{}, err
+	}
+	return cfg, typedCfg, nil
+}
+
+func newEndpoints[T any](cfg typedConfig[T]) (*producer[T], *consumer[T]) {
+	sess := &session{cfg: cfg.Config}
+	return &producer[T]{cfg: cfg, session: sess}, &consumer[T]{cfg: cfg, session: sess}
+}
+
+func warmUpIfEnabled[T any](cfg typedConfig[T], warmUp func(context.Context) error) error {
+	if !cfg.WarmUp {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.DialTimeout)
+	defer cancel()
+	return warmUp(ctx)
 }
 
 func toTypedConfig[T any](cfg runtimeConfig) (typedConfig[T], error) {
@@ -563,7 +593,14 @@ func toTypedConfig[T any](cfg runtimeConfig) (typedConfig[T], error) {
 	}, nil
 }
 
-func validateConfig(cfg runtimeConfig) error {
+func validateProviderConfig(cfg runtimeConfig) error {
+	if err := validateProducerConfig(cfg); err != nil {
+		return err
+	}
+	return validateConsumerModeConfig(cfg.Config)
+}
+
+func validateProducerConfig(cfg runtimeConfig) error {
 	if cfg.URL == "" {
 		return errors.New("nats: url not configured")
 	}
@@ -576,10 +613,17 @@ func validateConfig(cfg runtimeConfig) error {
 	if cfg.authUserInfoSet && (cfg.AuthUser == "" || cfg.AuthPassword == "") {
 		return ErrInvalidAuth
 	}
-	return validateModeConfig(cfg.Config)
+	return validateProducerModeConfig(cfg.Config)
 }
 
-func validateModeConfig(cfg Config) error {
+func validateConsumerConfig(cfg runtimeConfig) error {
+	if err := validateProducerConfig(cfg); err != nil {
+		return err
+	}
+	return validateConsumerModeConfig(cfg.Config)
+}
+
+func validateProducerModeConfig(cfg Config) error {
 	if cfg.Subject == "" {
 		return ErrSubjectRequired
 	}
@@ -588,6 +632,16 @@ func validateModeConfig(cfg Config) error {
 	}
 	if cfg.Stream == "" {
 		return ErrStreamRequired
+	}
+	return nil
+}
+
+func validateConsumerModeConfig(cfg Config) error {
+	if err := validateProducerModeConfig(cfg); err != nil {
+		return err
+	}
+	if cfg.Mode == Core {
+		return nil
 	}
 	if cfg.Durable == "" {
 		return ErrDurableRequired
@@ -771,6 +825,23 @@ type consumer[T any] struct {
 	messages jetstream.MessagesContext
 	mu       sync.Mutex
 	closed   atomic.Bool
+}
+
+// WarmUp eagerly establishes the consumer's NATS connection and subscription context.
+func (c *consumer[T]) WarmUp(ctx context.Context) error {
+	if c.closed.Load() {
+		return queue.ErrClosed
+	}
+	if c.cfg.Mode == Core {
+		_, err := c.ensureSubscription()
+		return err
+	}
+	if c.cfg.ConsumerMode == PushConsumer {
+		_, err := c.ensurePushSubscription(ctx)
+		return err
+	}
+	_, err := c.ensureMessages(ctx)
+	return err
 }
 
 func (c *consumer[T]) Receive(ctx context.Context) (queue.Message[T], error) {
