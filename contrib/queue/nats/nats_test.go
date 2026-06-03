@@ -65,6 +65,7 @@ func TestWithOptionsApplies(t *testing.T) {
 		WithDeliverGroup("push-workers"),
 		WithReplayPolicy(ReplayOriginal),
 		WithAutoCreateStream(true),
+		WithRetention(jetstream.WorkQueuePolicy),
 		WithStreamMaxAge(time.Hour),
 		WithStreamMaxBytes(1024),
 		WithDuplicateWindow(time.Minute),
@@ -101,6 +102,9 @@ func TestWithOptionsApplies(t *testing.T) {
 	}
 	if cfg.ReplayPolicy != ReplayOriginal {
 		t.Fatalf("unexpected replay policy: %v", cfg.ReplayPolicy)
+	}
+	if cfg.Retention != jetstream.WorkQueuePolicy {
+		t.Fatalf("unexpected retention policy: %v", cfg.Retention)
 	}
 	if cfg.StreamMaxAge != time.Hour || cfg.StreamMaxBytes != 1024 || cfg.DuplicateWindow != time.Minute {
 		t.Fatalf("unexpected stream limits: %s/%d/%s", cfg.StreamMaxAge, cfg.StreamMaxBytes, cfg.DuplicateWindow)
@@ -316,6 +320,18 @@ func TestDefaultAsyncPublishAckHandlerDrainsResult(t *testing.T) {
 	cfg.AsyncPublishAckHandler(future)
 }
 
+func TestStreamConfigAppliesWorkQueueRetention(t *testing.T) {
+	cfg := defaultConfig[struct{}]()
+	WithStream("EVENTS")(&cfg)
+	WithSubject("events.created")(&cfg)
+	WithRetention(jetstream.WorkQueuePolicy)(&cfg)
+
+	streamCfg := (&session{cfg: cfg.Config}).streamConfig()
+	if streamCfg.Retention != jetstream.WorkQueuePolicy {
+		t.Fatalf("expected WorkQueuePolicy, got %v", streamCfg.Retention)
+	}
+}
+
 func TestNewNATSProviderWarmsUpByDefault(t *testing.T) {
 	_, err := NewNATSProvider[integrationPayload](
 		WithURL("nats://127.0.0.1:1"),
@@ -490,6 +506,53 @@ func TestJetStreamPushConsumerWithDeliverGroupLoadBalances(t *testing.T) {
 	}
 }
 
+func TestJetStreamWorkQueueRetentionRemovesAckedMessage(t *testing.T) {
+	stream, subject, suffix := uniqueStreamSubject("work_queue")
+	deleteLocalStream(t, stream)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	provider, err := NewNATSProvider[integrationPayload](
+		WithMode(JetStream),
+		WithURL(localIntegrationURL),
+		WithStream(stream),
+		WithSubjects(subject),
+		WithSubject(subject),
+		WithDurable("work-queue-"+suffix),
+		WithFilterSubject(subject),
+		WithAutoCreateStream(true),
+		WithRetention(jetstream.WorkQueuePolicy),
+		WithMsgIDFromKey(true),
+		WithCodec[integrationPayload](queue.JSONCodec[integrationPayload]{}),
+	)
+	if err != nil {
+		t.Fatalf("provider error: %v", err)
+	}
+	defer provider.Consumer().Close()
+	defer provider.Producer().Close()
+
+	if err := provider.Producer().Send(ctx, queue.Message[integrationPayload]{
+		Key:   "work-queue-msg",
+		Value: integrationPayload{ID: "work-queue-msg"},
+	}); err != nil {
+		t.Fatalf("send work queue message: %v", err)
+	}
+
+	msg, err := provider.Consumer().Receive(ctx)
+	if err != nil {
+		t.Fatalf("receive work queue message: %v", err)
+	}
+	if err := provider.Consumer().Commit(ctx, msg); err != nil {
+		t.Fatalf("commit work queue message: %v", err)
+	}
+
+	info := waitForStreamMessages(t, ctx, stream, 0)
+	if info.Config.Retention != jetstream.WorkQueuePolicy {
+		t.Fatalf("expected WorkQueuePolicy, got %v", info.Config.Retention)
+	}
+}
+
 func TestJetStreamProducerSendElapsed(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -648,6 +711,39 @@ func deleteLocalStream(t *testing.T, stream string) {
 	t.Cleanup(func() {
 		_ = js.DeleteStream(stream)
 	})
+}
+
+func waitForStreamMessages(t *testing.T, ctx context.Context, stream string, want uint64) *jetstream.StreamInfo {
+	t.Helper()
+	nc, err := natsgo.Connect(localIntegrationURL, natsgo.Timeout(time.Second))
+	if err != nil {
+		t.Fatalf("connect local nats %s: %v", localIntegrationURL, err)
+	}
+	t.Cleanup(nc.Close)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("create local jetstream context: %v", err)
+	}
+	jsStream, err := js.Stream(ctx, stream)
+	if err != nil {
+		t.Fatalf("get stream %s: %v", stream, err)
+	}
+
+	var info *jetstream.StreamInfo
+	for {
+		info, err = jsStream.Info(ctx)
+		if err != nil {
+			t.Fatalf("get stream info %s: %v", stream, err)
+		}
+		if info.State.Msgs == want {
+			return info
+		}
+		select {
+		case <-time.After(25 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for stream %s messages=%d, last=%d", stream, want, info.State.Msgs)
+		}
+	}
 }
 
 type fakePublisher struct {
