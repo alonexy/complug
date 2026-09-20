@@ -583,7 +583,7 @@ func buildTypedConfig[T any](opts ...Option) (runtimeConfig, typedConfig[T], err
 
 func newEndpoints[T any](cfg typedConfig[T]) (*producer[T], *consumer[T]) {
 	sess := &session{cfg: cfg.Config}
-	return &producer[T]{cfg: cfg, session: sess}, &consumer[T]{cfg: cfg, session: sess}
+	return &producer[T]{cfg: cfg, session: sess}, &consumer[T]{cfg: cfg, session: sess, pullSetup: make(chan struct{}, 1)}
 }
 
 func warmUpIfEnabled[T any](cfg typedConfig[T], warmUp func(context.Context) error) error {
@@ -855,12 +855,46 @@ func (p *producer[T]) Close() error {
 }
 
 type consumer[T any] struct {
-	cfg      typedConfig[T]
-	session  *session
-	sub      *natsgo.Subscription
-	messages jetstream.MessagesContext
-	mu       sync.Mutex
-	closed   atomic.Bool
+	cfg       typedConfig[T]
+	session   *session
+	sub       *natsgo.Subscription
+	messages  jetstream.MessagesContext
+	pull      *pullReceiver
+	pullSetup chan struct{}
+	mu        sync.Mutex
+	closed    atomic.Bool
+}
+
+type pullResult struct {
+	msg jetstream.Msg
+	err error
+}
+
+// pullReceiver owns the SDK iterator for the lifetime of the consumer. A caller
+// may stop waiting without discarding the pending message or stopping other callers.
+type pullReceiver struct {
+	requests chan struct{}
+	results  chan pullResult
+	cancel   context.CancelFunc
+	stopped  chan struct{}
+}
+
+func (p *pullReceiver) run(ctx context.Context, messages jetstream.MessagesContext) {
+	defer close(p.stopped)
+	defer close(p.results)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.requests:
+		}
+		msg, err := messages.Next()
+		select {
+		case <-ctx.Done():
+			return
+		case p.results <- pullResult{msg: msg, err: err}:
+		}
+	}
 }
 
 // WarmUp eagerly establishes the consumer's NATS connection and subscription context.
@@ -906,13 +940,29 @@ func (c *consumer[T]) receiveCore(ctx context.Context) (queue.Message[T], error)
 }
 
 func (c *consumer[T]) receiveJetStream(ctx context.Context) (queue.Message[T], error) {
-	messages, err := c.ensureMessages(ctx)
+	if err := ctx.Err(); err != nil {
+		return queue.Message[T]{}, err
+	}
+	pull, err := c.ensurePullReceiver(ctx)
 	if err != nil {
 		return queue.Message[T]{}, err
 	}
-	msg, err := messages.Next()
-	if err != nil {
-		return queue.Message[T]{}, err
+	var msg jetstream.Msg
+	for msg == nil {
+		select {
+		case <-ctx.Done():
+			return queue.Message[T]{}, ctx.Err()
+		case pull.requests <- struct{}{}:
+			// The worker only requests another message while a caller is waiting.
+		case result, ok := <-pull.results:
+			if !ok || c.closed.Load() {
+				return queue.Message[T]{}, queue.ErrClosed
+			}
+			if result.err != nil {
+				return queue.Message[T]{}, result.err
+			}
+			msg = result.msg
+		}
 	}
 	value, err := c.cfg.Decoder.Decode(ctx, msg.Data())
 	if err != nil {
@@ -986,10 +1036,14 @@ func (c *consumer[T]) Channel(ctx context.Context) (<-chan queue.Message[T], <-c
 		for {
 			msg, err := c.Receive(ctx)
 			if err != nil {
-				if ctx.Err() != nil {
+				if ctx.Err() != nil || errors.Is(err, queue.ErrClosed) {
 					return
 				}
-				errs <- err
+				select {
+				case <-ctx.Done():
+					return
+				case errs <- err:
+				}
 				continue
 			}
 			select {
@@ -1006,7 +1060,16 @@ func (c *consumer[T]) Close() error {
 	if c.closed.Swap(true) {
 		return nil
 	}
+	// Wait for in-progress initialization before releasing its connection.
+	if c.pullSetup != nil {
+		c.pullSetup <- struct{}{}
+		defer func() { <-c.pullSetup }()
+	}
 	c.mu.Lock()
+	pull := c.pull
+	if pull != nil {
+		pull.cancel()
+	}
 	if c.sub != nil {
 		_ = c.sub.Unsubscribe()
 		c.sub = nil
@@ -1017,6 +1080,9 @@ func (c *consumer[T]) Close() error {
 	}
 	c.mu.Unlock()
 	c.session.reset()
+	if pull != nil {
+		<-pull.stopped
+	}
 	return nil
 }
 
@@ -1067,9 +1133,21 @@ func (c *consumer[T]) ensurePushSubscription(ctx context.Context) (*natsgo.Subsc
 }
 
 func (c *consumer[T]) ensureMessages(ctx context.Context) (jetstream.MessagesContext, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case c.pullSetup <- struct{}{}:
+	}
+	defer func() { <-c.pullSetup }()
 	c.mu.Lock()
 	messages := c.messages
 	c.mu.Unlock()
+	if c.closed.Load() {
+		return nil, queue.ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if messages != nil {
 		return messages, nil
 	}
@@ -1095,6 +1173,29 @@ func (c *consumer[T]) ensureMessages(ctx context.Context) (jetstream.MessagesCon
 	c.messages = messages
 	c.mu.Unlock()
 	return messages, nil
+}
+
+func (c *consumer[T]) ensurePullReceiver(ctx context.Context) (*pullReceiver, error) {
+	messages, err := c.ensureMessages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed.Load() {
+		return nil, queue.ErrClosed
+	}
+	if c.pull == nil {
+		lifetime, cancel := context.WithCancel(context.Background())
+		c.pull = &pullReceiver{
+			requests: make(chan struct{}),
+			results:  make(chan pullResult),
+			cancel:   cancel,
+			stopped:  make(chan struct{}),
+		}
+		go c.pull.run(lifetime, messages)
+	}
+	return c.pull, nil
 }
 
 func (c *consumer[T]) pullOptions() []jetstream.PullMessagesOpt {

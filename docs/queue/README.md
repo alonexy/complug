@@ -330,7 +330,9 @@ nats.WithSetupTimeout(10*time.Second), // 预热初始化超时；省略或 0 �
 
 从 `v1.1.0` 起，NATS 适配器内部要求 `nats.go v1.44.0`，修复连接关闭后进行中的 JetStream Pull `Receive` 仍阻塞的问题。调用 `Consumer.Close()` 后，等待消息的 `Receive` 返回非空错误；关闭后再次调用 `Receive` 返回 `queue.ErrClosed`，重复关闭保持幂等。调用方只需升级 complug 模块，不需要直接导入 NATS SDK。
 
-此修复只覆盖主动关闭消费者的场景。当前 Pull `Receive(ctx)` 等待消息时仍未监听 `ctx` 的取消；仅调用 `cancel()` 不保证退出，不能用这一修复宣称应用的完整优雅停机流程已通过。关闭连接也不等于等待业务任务处理完成，在途处理和消息确认仍由调用方安排。
+`v1.1.0` 的修复只覆盖主动关闭消费者。`v1.1.1` 补齐 Pull `Receive(ctx)` 等待消息以及等待其他调用初始化时的取消：取消返回 `context.Canceled`，到期返回 `context.DeadlineExceeded`。取消只结束本次等待，不关闭消费者或共享连接；其他并发接收和后续使用新 context 的接收可以继续。首次延迟建连自身仍受 SDK `DialTimeout` 控制，不保证被 context 立即中断；默认预热会在构造阶段建立连接。
+
+内部每个 Pull 消费者最多维护一个接收协程，只在有 `Receive` 等待时请求下一条消息。取消后正在接收的结果保留给后续调用，不丢弃 SDK 缓冲，也不自动确认消息。`Close()` 停止迭代器并等待该协程退出。`Channel(ctx)` 在取消时关闭消息和错误通道，即使错误通道已满也能退出。调用方仍须在消费者不再使用时调用 `Close()` 释放连接；业务任务处理完成和消息确认由调用方安排。
 
 ### 5.3 认证
 
