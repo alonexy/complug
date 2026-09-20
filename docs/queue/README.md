@@ -328,6 +328,10 @@ nats.WithSetupTimeout(10*time.Second), // 预热初始化超时；省略或 0 �
 
 当前 SDK 默认连接 Ping 为 2 分钟，默认拉取消费心跳为 15 秒。`WithPullHeartbeat` 的非零值范围为 500 毫秒至 15 秒，受默认拉取有效期 30 秒约束；仅作用于 JetStream pull，不改变 push 或 Core NATS 消费方式。三个参数都拒绝负数，非法值在连接之前返回错误。此处只透传 SDK 参数，不实现额外心跳或连接管理，也不决定调用方进程是否退出。
 
+从 `v1.1.0` 起，NATS 适配器内部要求 `nats.go v1.44.0`，修复连接关闭后进行中的 JetStream Pull `Receive` 仍阻塞的问题。调用 `Consumer.Close()` 后，等待消息的 `Receive` 返回非空错误；关闭后再次调用 `Receive` 返回 `queue.ErrClosed`，重复关闭保持幂等。调用方只需升级 complug 模块，不需要直接导入 NATS SDK。
+
+此修复只覆盖主动关闭消费者的场景。当前 Pull `Receive(ctx)` 等待消息时仍未监听 `ctx` 的取消；仅调用 `cancel()` 不保证退出，不能用这一修复宣称应用的完整优雅停机流程已通过。关闭连接也不等于等待业务任务处理完成，在途处理和消息确认仍由调用方安排。
+
 ### 5.3 认证
 
 当前 NATS 适配器只实现两种认证方式：
