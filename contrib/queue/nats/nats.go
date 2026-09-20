@@ -79,6 +79,9 @@ type Config struct {
 	DoubleAck              bool
 	MaxChanSize            int
 	DialTimeout            time.Duration
+	SetupTimeout           time.Duration
+	PingInterval           time.Duration
+	PullHeartbeat          time.Duration
 	ReconnectBackoff       time.Duration
 	ReconnectMaxBackoff    time.Duration
 	ReconnectForever       bool
@@ -315,6 +318,21 @@ func WithDialTimeout(timeout time.Duration) Option {
 	return func(cfg *runtimeConfig) {
 		cfg.DialTimeout = timeout
 	}
+}
+
+// WithSetupTimeout 设置预热初始化超时；0 沿用 DialTimeout。
+func WithSetupTimeout(timeout time.Duration) Option {
+	return func(cfg *runtimeConfig) { cfg.SetupTimeout = timeout }
+}
+
+// WithPingInterval 设置 NATS 连接 Ping 间隔；0 保留 SDK 默认值。
+func WithPingInterval(interval time.Duration) Option {
+	return func(cfg *runtimeConfig) { cfg.PingInterval = interval }
+}
+
+// WithPullHeartbeat 设置 JetStream 拉取消费心跳；0 保留 SDK 默认值。
+func WithPullHeartbeat(interval time.Duration) Option {
+	return func(cfg *runtimeConfig) { cfg.PullHeartbeat = interval }
 }
 
 // WithReconnectBackoff 设置重连退避初始间隔。
@@ -572,7 +590,11 @@ func warmUpIfEnabled[T any](cfg typedConfig[T], warmUp func(context.Context) err
 	if !cfg.WarmUp {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.DialTimeout)
+	timeout := cfg.SetupTimeout
+	if timeout == 0 {
+		timeout = cfg.DialTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return warmUp(ctx)
 }
@@ -601,6 +623,12 @@ func validateProviderConfig(cfg runtimeConfig) error {
 }
 
 func validateProducerConfig(cfg runtimeConfig) error {
+	if cfg.SetupTimeout < 0 || cfg.PingInterval < 0 {
+		return errors.New("nats: setup timeout and ping interval must not be negative")
+	}
+	if cfg.PullHeartbeat != 0 && (cfg.PullHeartbeat < 500*time.Millisecond || cfg.PullHeartbeat > jetstream.DefaultExpires/2) {
+		return errors.New("nats: pull heartbeat must be within 500ms-15s")
+	}
 	if cfg.URL == "" {
 		return errors.New("nats: url not configured")
 	}
@@ -662,17 +690,7 @@ func (s *session) ensureConn() (*natsgo.Conn, error) {
 	if s.nc != nil && !s.nc.IsClosed() {
 		return s.nc, nil
 	}
-	opts := []natsgo.Option{
-		natsgo.Timeout(s.cfg.DialTimeout),
-		natsgo.ReconnectWait(s.cfg.ReconnectBackoff),
-		natsgo.MaxReconnects(maxReconnects(s.cfg)),
-	}
-	if s.cfg.AuthToken != "" {
-		opts = append(opts, natsgo.Token(s.cfg.AuthToken))
-	}
-	if s.cfg.AuthUser != "" {
-		opts = append(opts, natsgo.UserInfo(s.cfg.AuthUser, s.cfg.AuthPassword))
-	}
+	opts := s.connectionOptions()
 	nc, err := natsgo.Connect(s.cfg.URL, opts...)
 	if err != nil {
 		return nil, err
@@ -680,6 +698,24 @@ func (s *session) ensureConn() (*natsgo.Conn, error) {
 	s.nc = nc
 	s.js = nil
 	return nc, nil
+}
+
+func (s *session) connectionOptions() []natsgo.Option {
+	opts := []natsgo.Option{
+		natsgo.Timeout(s.cfg.DialTimeout),
+		natsgo.ReconnectWait(s.cfg.ReconnectBackoff),
+		natsgo.MaxReconnects(maxReconnects(s.cfg)),
+	}
+	if s.cfg.PingInterval > 0 {
+		opts = append(opts, natsgo.PingInterval(s.cfg.PingInterval))
+	}
+	if s.cfg.AuthToken != "" {
+		opts = append(opts, natsgo.Token(s.cfg.AuthToken))
+	}
+	if s.cfg.AuthUser != "" {
+		opts = append(opts, natsgo.UserInfo(s.cfg.AuthUser, s.cfg.AuthPassword))
+	}
+	return opts
 }
 
 func (s *session) ensureJetStream(ctx context.Context) (jetstream.JetStream, error) {
@@ -1051,7 +1087,7 @@ func (c *consumer[T]) ensureMessages(ctx context.Context) (jetstream.MessagesCon
 	if err != nil {
 		return nil, err
 	}
-	messages, err = consumer.Messages(jetstream.PullMaxMessages(c.cfg.PullMaxMessages))
+	messages, err = consumer.Messages(c.pullOptions()...)
 	if err != nil {
 		return nil, err
 	}
@@ -1059,6 +1095,14 @@ func (c *consumer[T]) ensureMessages(ctx context.Context) (jetstream.MessagesCon
 	c.messages = messages
 	c.mu.Unlock()
 	return messages, nil
+}
+
+func (c *consumer[T]) pullOptions() []jetstream.PullMessagesOpt {
+	opts := []jetstream.PullMessagesOpt{jetstream.PullMaxMessages(c.cfg.PullMaxMessages)}
+	if c.cfg.PullHeartbeat > 0 {
+		opts = append(opts, jetstream.PullHeartbeat(c.cfg.PullHeartbeat))
+	}
+	return opts
 }
 
 func (c *consumer[T]) pushSubscribeOptions() []natsgo.SubOpt {

@@ -58,16 +58,16 @@ Complug 采用 **Monorepo (单仓多模块)** 架构，核心目标是实现极�
 
 ```bash
 # Kafka 适配
-go get github.com/alonexy/complug/contrib/queue/kafka@v1.0.7
+go get github.com/alonexy/complug/contrib/queue/kafka@v1.0.9
 
 # RabbitMQ 适配
-go get github.com/alonexy/complug/contrib/queue/rabbitmq@v1.0.7
+go get github.com/alonexy/complug/contrib/queue/rabbitmq@v1.0.9
 
 # NATS 适配
-go get github.com/alonexy/complug/contrib/queue/nats@v1.0.8
+go get github.com/alonexy/complug/contrib/queue/nats@v1.0.9
 
 # Protobuf Codec
-go get github.com/alonexy/complug/contrib/queue/protobuf@v1.0.7
+go get github.com/alonexy/complug/contrib/queue/protobuf@v1.0.9
 ```
 
 ### 4.2 提交与 Tag 规则

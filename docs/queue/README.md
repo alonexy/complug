@@ -318,6 +318,16 @@ if warm, ok := provider.(interface{ WarmUp(context.Context) error }); ok {
 }
 ```
 
+可选连接和拉取消费参数通过 SDK 原生选项生效：
+
+```go
+nats.WithPingInterval(2*time.Second),  // 连接 Ping；省略或 0 使用 SDK 默认值
+nats.WithPullHeartbeat(2*time.Second), // JetStream pull 心跳；省略或 0 使用 SDK 默认值
+nats.WithSetupTimeout(10*time.Second), // 预热初始化超时；省略或 0 沿用 DialTimeout
+```
+
+当前 SDK 默认连接 Ping 为 2 分钟，默认拉取消费心跳为 15 秒。`WithPullHeartbeat` 的非零值范围为 500 毫秒至 15 秒，受默认拉取有效期 30 秒约束；仅作用于 JetStream pull，不改变 push 或 Core NATS 消费方式。三个参数都拒绝负数，非法值在连接之前返回错误。此处只透传 SDK 参数，不实现额外心跳或连接管理，也不决定调用方进程是否退出。
+
 ### 5.3 认证
 
 当前 NATS 适配器只实现两种认证方式：
