@@ -318,6 +318,12 @@ if warm, ok := provider.(interface{ WarmUp(context.Context) error }); ok {
 }
 ```
 
+连接重连按 `WithReconnectBackoff` 的初始间隔指数增长，并以 `WithReconnectMaxBackoff` 封顶；默认是 1 秒增长到 30 秒，每次等待带最多 20% 的向下随机抖动。显式将任一间隔设为零时，保留原 SDK 等待和抖动行为。`WithReconnectForever(true)` 不限制连接重连次数，`false` 时仍由 `WithMaxRetries` 限制。等待和关闭由 NATS SDK 管理，适配器不创建额外重连协程。
+
+JetStream 缓存会同时核对其所属连接。旧连接关闭后，后续显式调用 `Send` 可以重建连接及 context；并发初始化不会把旧连接对象写回缓存。发布 API 返回错误时，适配器仍直接返回，不循环重发本条消息。每次 `Send` 只调用一次同步或异步发布 API；SDK 原有的无响应重试语义保持不变，不表示网络上的物理发布严格一次。
+
+模块测试可用 `COMPLUG_NATS_TEST_URL` 指向独占 JetStream 测试服务，未设置时仍使用 `nats://127.0.0.1:4222`。真实连接恢复回归会关闭测试自身的连接并检查后续显式新消息、并发初始化和精确消息数量，不重启共享服务。
+
 可选连接和拉取消费参数通过 SDK 原生选项生效：
 
 ```go

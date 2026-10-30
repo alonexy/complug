@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -12,7 +13,12 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-const localIntegrationURL = "nats://127.0.0.1:4222"
+var localIntegrationURL = func() string {
+	if url := os.Getenv("COMPLUG_NATS_TEST_URL"); url != "" {
+		return url
+	}
+	return "nats://127.0.0.1:4222"
+}()
 
 type integrationPayload struct {
 	ID string `json:"id"`

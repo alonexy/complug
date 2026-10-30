@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -706,6 +707,10 @@ func (s *session) connectionOptions() []natsgo.Option {
 		natsgo.ReconnectWait(s.cfg.ReconnectBackoff),
 		natsgo.MaxReconnects(maxReconnects(s.cfg)),
 	}
+	// 显式零间隔保留原 SDK 等待与抖动；正常正数配置启用指数退避。
+	if s.cfg.ReconnectBackoff > 0 && s.cfg.ReconnectMaxBackoff > 0 {
+		opts = append(opts, natsgo.CustomReconnectDelay(s.reconnectDelay))
+	}
 	if s.cfg.PingInterval > 0 {
 		opts = append(opts, natsgo.PingInterval(s.cfg.PingInterval))
 	}
@@ -718,16 +723,50 @@ func (s *session) connectionOptions() []natsgo.Option {
 	return opts
 }
 
+// reconnectDelay 按失败轮次指数退避并封顶；20% 抖动避免多个连接同时重试。
+// SDK 在每轮尝试完服务器列表后从 1 开始调用，等待及关闭仍由 SDK 管理。
+func (s *session) reconnectDelay(attempt int) time.Duration {
+	delay, maximum := s.cfg.ReconnectBackoff, s.cfg.ReconnectMaxBackoff
+	if delay <= 0 {
+		return 0
+	}
+	if maximum <= 0 {
+		maximum = delay
+	}
+	for index := 1; index < attempt && delay < maximum; index++ {
+		if delay > maximum/2 {
+			delay = maximum
+			break
+		}
+		delay *= 2
+	}
+	if delay > maximum {
+		delay = maximum
+	}
+	if jitter := delay / 5; jitter > 0 {
+		delay -= time.Duration(rand.Int64N(int64(jitter) + 1))
+	}
+	return delay
+}
+
 func (s *session) ensureJetStream(ctx context.Context) (jetstream.JetStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// 必须先检查连接；缓存的 JetStream 可能仍绑定于已关闭的旧连接。
+	nc, err := s.ensureConn()
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
+	if s.nc != nc || nc.IsClosed() {
+		s.mu.Unlock()
+		return nil, natsgo.ErrConnectionClosed
+	}
 	js := s.js
 	s.mu.Unlock()
 	if js != nil {
 		return js, nil
-	}
-	nc, err := s.ensureConn()
-	if err != nil {
-		return nil, err
 	}
 	js, err = jetstream.New(nc)
 	if err != nil {
@@ -739,9 +778,15 @@ func (s *session) ensureJetStream(ctx context.Context) (jetstream.JetStream, err
 		}
 	}
 	s.mu.Lock()
-	s.js = js
-	s.mu.Unlock()
-	return js, nil
+	defer s.mu.Unlock()
+	// 初始化期间可能发生关闭或换连，旧调用不能覆盖新连接的缓存。
+	if s.nc != nc || nc.IsClosed() {
+		return nil, natsgo.ErrConnectionClosed
+	}
+	if s.js == nil {
+		s.js = js
+	}
+	return s.js, nil
 }
 
 func (s *session) streamConfig() jetstream.StreamConfig {
